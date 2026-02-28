@@ -1,121 +1,244 @@
 import streamlit as st
 import json
-import os
+import urllib.parse
+from streamlit_local_storage import LocalStorage
+import io
+import requests
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Image,
+    Table,
+    TableStyle,
+)
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
+from reportlab.lib.styles import getSampleStyleSheet
 
-st.set_page_config(page_title="Shri Girraj Mukut Shringar Kendra Mathura", layout="wide")
+st.set_page_config(
+    page_title="Shri Girraj Mukut Shringar Kendra Mathura", layout="wide"
+)
 
-# Load product data
+# ---------------- LOAD PRODUCT DATA ----------------
 with open("products.json", "r", encoding="utf-8") as f:
     data = json.load(f)
 
-st.write("")
-st.write("")
-st.write("")
-st.write("")
-st.write("")
-st.write("")
-st.write("")
-st.title("🛍 !!!!!!!!!!!!!!!!!!!Shri Girraj Mukut Shringar Kendra Product Catalogue")
+# ---------------- BROWSER LOCAL STORAGE ----------------
+local_storage = LocalStorage()
 
-# --- add simple CSS for background and cards ---
-st.markdown(
-        """
-        <style>
-            /* page background gradient */
-            [data-testid="stAppViewContainer"] {
-                background: linear-gradient(180deg, #fffaf0 0%, #f0f9ff 100%);
-            }
-            /* container padding */
-            .block-container {
-                padding-top: 1rem;
-                padding-left: 1rem;
-                padding-right: 1rem;
-                padding-bottom: 2rem;
-            }
-            /* product card */
-            .product-card {
-                background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.7));
-                border-radius: 12px;
-                padding: 12px 14px;
-                box-shadow: 0 6px 18px rgba(10,10,20,0.06);
-                margin-top: 8px;
-                margin-bottom: 12px;
-            }
-            .product-card h3 { color: #2b2b2b; margin: 8px 0 10px 0; font-size: 18px; font-weight: 600; }
-            .product-img { width: 100%; height: auto; border-radius: 8px; display:block; margin-bottom:8px; }
-            /* subtle header style */
-            .stHeader, .css-1v3fvcr h1 { color: #1f3b6f; margin-bottom: 3rem !important; }
-            /* category pills (select) spacing on top */
-            .stSelectbox { margin-top: 2rem; margin-bottom: 1rem; }
-            /* pill button styling */
-            .stButton > button {
-                border-radius: 20px !important;
-                padding: 8px 16px !important;
-                font-weight: 600 !important;
-                border: none !important;
-                transition: all 0.3s ease !important;
-            }
-            .stButton > button:hover {
-                transform: translateY(-2px) !important;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
-)
+# ---------------- LOAD CART (FROM BROWSER) ----------------
+if "cart" not in st.session_state:
+    saved_cart = local_storage.getItem("cart")
 
-# Top-level Category (visible on mobile) - dropdown selector at top
+    if saved_cart:
+        st.session_state.cart = json.loads(saved_cart)
+    else:
+        st.session_state.cart = []
+
+
+# ---------------- ADD TO CART FUNCTION ----------------
+def add_to_cart(product_name, size, price, dozens, image):
+    item = {
+        "product": product_name,
+        "size": size,
+        "price_per_piece": price,
+        "dozens": dozens,
+        "quantity": dozens * 12,
+        "total_price": price * 12 * dozens,
+        "image": image,
+    }
+
+    st.session_state.cart.append(item)
+
+    # SAVE TO BROWSER
+    local_storage.setItem("cart", json.dumps(st.session_state.cart))
+
+
+# ---------------- UI ----------------
+st.title("🛍 Shri Girraj Mukut Shringar Kendra Product Catalogue")
+
+# Category selection
 category = st.selectbox("Select Category", list(data.keys()))
-
-# Subcategory select (also at top) — includes "All"
 subcategory_list = list(data[category].keys())
 subcategory_options = ["All"] + subcategory_list
 subcategory = st.selectbox("Select Subcategory", subcategory_options)
 
 if subcategory == "All":
-    # Aggregate products from all subcategories for the chosen category
     products_by_sub = {k: v for k, v in data[category].items()}
 else:
     products_by_sub = {subcategory: data[category].get(subcategory, [])}
 
-st.subheader(f"📌 Category: {category.upper()}  |  Subcategory: {subcategory.replace('_',' ').upper()}")
+st.subheader(
+    f"📌 Category: {category.upper()}  |  Subcategory: {subcategory.replace('_',' ').upper()}"
+)
 st.write("---")
 
-# Search
 search = st.text_input("🔍 Search Product Name")
 
-filtered_products = []
-
-# When showing "All", iterate each subcategory and display its products
-# Use 2 columns for better mobile layout, Streamlit will stack on narrow screens
-cols = st.columns(2)
-n_cols = len(cols)
-idx = 0
+# ---------------- DISPLAY PRODUCTS ----------------
 for sub_name, products in products_by_sub.items():
-    # Optional small header for each subcategory when showing all
+
     if subcategory == "All":
-        st.markdown(f"**{sub_name.replace('_',' ').title()}**")
+        st.markdown(f"### {sub_name.replace('_',' ').title()}")
+
+    cols = st.columns(2)
+    idx = 0
 
     for p in products:
-        if search and search.strip() != "":
-            if search.lower() not in p.get("name", "").lower():
-                continue
 
-        with cols[idx % n_cols]:
-            img_rel = p.get("image", "")
-            img_path = os.path.join("images", img_rel)
-            if os.path.exists(img_path):
-                st.markdown(f"<div class='product-card'><h3>{p.get('name','Unnamed')}</h3></div>", unsafe_allow_html=True)
-                st.image(img_path, use_column_width=True)
-            else:
-                st.markdown(f"### {p.get('name','Unnamed')}")
-                st.warning("Image not found. Add it in images/ folder.")
-            
-            # descriptions were removed from the JSON; leave placeholder if needed
-            desc = p.get("description", "")
-            if desc:
-                st.write(desc)
+        if search and search.lower() not in p.get("name", "").lower():
+            continue
+
+        with cols[idx % 2]:
+
+            st.markdown(f"### {p.get('name','Unnamed')}")
+
+            # Show image (URL supported)
+            img_url = p.get("image", "")
+            if img_url:
+                st.image(img_url, width="stretch")
+
+            prices = p.get("prices", {})
+
+            if prices:
+
+                unique_key = f"{category}_{sub_name}_{p['id']}"
+
+                size = st.selectbox(
+                    "Select Size", list(prices.keys()), key=f"size_{unique_key}"
+                )
+
+                price = prices[size]
+                st.write(f"💵 Price per piece: ₹{price}")
+
+                dozens = st.number_input(
+                    "Select Quantity (in dozens)",
+                    min_value=1,
+                    step=1,
+                    value=1,
+                    key=f"dozen_{unique_key}",
+                )
+
+                st.write(f"Total Pieces: {dozens * 12}")
+                st.write(f"Total Price: ₹{price * 12 * dozens}")
+
+                if st.button("Add to Cart", key=f"btn_{unique_key}"):
+                    add_to_cart(p["name"], size, price, dozens, img_url)
+                    st.success("Added to cart ✅")
+
             st.markdown("---")
-        
+
         idx += 1
 
+
+def generate_pdf(cart_items, total_amount):
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"]
+
+    elements.append(Paragraph("Shri Girraj Mukut Shringar Kendra", title_style))
+    elements.append(Spacer(1, 12))
+
+    elements.append(Paragraph("Order Summary", styles["Heading2"]))
+    elements.append(Spacer(1, 12))
+
+    for item in cart_items:
+
+        elements.append(
+            Paragraph(f"<b>Product:</b> {item['product']}", styles["Normal"])
+        )
+        elements.append(Paragraph(f"Size: {item['size']}", styles["Normal"]))
+        elements.append(
+            Paragraph(
+                f"Quantity: {item['dozens']} dozen ({item['quantity']} pcs)",
+                styles["Normal"],
+            )
+        )
+        elements.append(Paragraph(f"Total: ₹{item['total_price']}", styles["Normal"]))
+        elements.append(Spacer(1, 6))
+
+        # Add Image
+        try:
+            response = requests.get(item["image"])
+            img_data = io.BytesIO(response.content)
+            img = Image(img_data, width=2 * inch, height=2 * inch)
+            elements.append(img)
+        except:
+            elements.append(Paragraph("Image not available", styles["Normal"]))
+
+        elements.append(Spacer(1, 20))
+
+    elements.append(
+        Paragraph(f"<b>Final Amount: ₹{total_amount}</b>", styles["Heading2"])
+    )
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Delivery Charges: Not Included", styles["Normal"]))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+# ================= CART SECTION =================
+st.header("🛒 Cart Summary")
+
+total = 0
+order_message = "🛍 *New Order - Shri Girraj Mukut Shringar Kendra*\n\n"
+
+for item in st.session_state.cart:
+    line = (
+        f"📦 *{item['product']}*\n"
+        f"🖼 Image: {item['image']}\n"
+        f"Size: {item['size']}\n"
+        f"Quantity: {item['dozens']} dozen ({item['quantity']} pcs)\n"
+        f"Amount: ₹{item['total_price']}\n\n"
+    )
+    order_message += line
+    total += item["total_price"]
+
+if total > 0:
+    pdf_file = generate_pdf(st.session_state.cart, total)
+
+    st.download_button(
+        label="📄 Download Order PDF",
+        data=pdf_file,
+        file_name="order_summary.pdf",
+        mime="application/pdf",
+    )
+
+    order_message += f"💰 *Final Amount:* ₹{total}\n"
+    order_message += "🚚 Delivery Charges: Not Included\n"
+
+    st.subheader(f"💰 Final Amount: ₹{total}")
+    st.write("🚚 Delivery Charges Not Included")
+
+    encoded_message = urllib.parse.quote(order_message)
+
+    whatsapp_number = "917417866405"
+    whatsapp_url = f"https://wa.me/{whatsapp_number}?text={encoded_message}"
+
+    st.markdown(
+        f'<a href="{whatsapp_url}" target="_blank">'
+        f'<button style="background-color:green;color:white;padding:10px 20px;'
+        f'border:none;border-radius:5px;font-size:16px;">'
+        f"Place Order on WhatsApp</button></a>",
+        unsafe_allow_html=True,
+    )
+
+    # Clear cart button
+    if st.button("✅ Clear Cart After Order"):
+        st.session_state.cart = []
+        local_storage.deleteItem("cart")
+        st.success("Cart Cleared Successfully 🎉")
+
+else:
+    st.info("Your cart is empty.")
